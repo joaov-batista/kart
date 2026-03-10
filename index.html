@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kart 3D - Protótipo</title>
+    <title>Kart 3D - Pista e Rodas</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #87CEEB; }
         #ui {
             position: absolute; top: 10px; left: 10px; color: white;
             font-family: Arial, sans-serif; text-shadow: 2px 2px 0 #000;
+            background: rgba(0, 0, 0, 0.5); padding: 15px; border-radius: 8px;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -16,14 +17,14 @@
 <body>
     <div id="ui">
         <h2>Corrida Maluca</h2>
-        <p>Use SETAS ou WASD para dirigir.</p>
+        <p>Use <b>SETAS</b> ou <b>W A S D</b> para dirigir.</p>
         <p>Velocidade: <span id="speed">0</span> km/h</p>
     </div>
 
     <script>
-        // 1. Configuração Básica do Mundo 3D
+        // 1. Configuração do Mundo 3D
         const scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x87ceeb, 10, 100); // Efeito de neblina ao fundo
+        scene.fog = new THREE.FogExp2(0x87ceeb, 0.005);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -31,97 +32,161 @@
         document.body.appendChild(renderer.domElement);
 
         // Luzes
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(10, 20, 10);
+        dirLight.position.set(50, 100, 50);
         scene.add(dirLight);
 
-        // Chão (Pista de asfalto simples)
-        const groundGeo = new THREE.PlaneGeometry(200, 200);
-        const groundMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        // 2. Criando o Mapa (Pista em formato de 8 usando Canvas)
+        function createTrackTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+
+            // Fundo de grama
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, 0, 1024, 1024);
+
+            // Configuração do asfalto
+            ctx.strokeStyle = '#333333';
+            ctx.lineWidth = 120;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+
+            // Desenhando o formato de "8"
+            ctx.beginPath();
+            ctx.arc(300, 512, 220, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(724, 512, 220, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Faixa central tracejada branca
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 6;
+            ctx.setLineDash([30, 30]);
+            ctx.beginPath();
+            ctx.arc(300, 512, 220, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(724, 512, 220, 0, Math.PI * 2);
+            ctx.stroke();
+
+            const texture = new THREE.CanvasTexture(canvas);
+            // Faz a textura repetir corretamente no plano
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            return texture;
+        }
+
+        const groundGeo = new THREE.PlaneGeometry(300, 300);
+        const groundMat = new THREE.MeshStandardMaterial({ map: createTrackTexture() });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
         scene.add(ground);
 
-        // 2. Criando o Carro (Exemplo: O "Mustang" em blocos)
+        // 3. Criando o Carro com Rodas
         const carGroup = new THREE.Group();
         
-        // Chassi (Azul para representar o Mustang)
-        const chassiGeo = new THREE.BoxGeometry(2, 0.5, 4);
-        const chassiMat = new THREE.MeshStandardMaterial({ color: 0x0000ff });
-        const chassi = new THREE.Mesh(chassiGeo, chassiMat);
+        // Chassi (Corpo do carro)
+        const chassiMat = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Carro Vermelho
+        const chassi = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 4), chassiMat);
         chassi.position.y = 0.5;
         carGroup.add(chassi);
 
-        // Adicionando o "Player1.png" como um outdoor em cima do carro
-        const textureLoader = new THREE.TextureLoader();
-        // Nota: Vai dar um aviso se player1.png não estiver na mesma pasta!
-        const playerTexture = textureLoader.load('player1.png'); 
-        const playerGeo = new THREE.PlaneGeometry(1, 1);
-        const playerMat = new THREE.MeshBasicMaterial({ map: playerTexture, transparent: true, side: THREE.DoubleSide });
-        const player = new THREE.Mesh(playerGeo, playerMat);
-        player.position.set(0, 1.5, 0); // Fica em pé no chassi
-        carGroup.add(player);
+        // Cabine
+        const cabine = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 1.5), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+        cabine.position.set(0, 1, -0.5);
+        carGroup.add(cabine);
+
+        // Função para criar rodas
+        const wheels = [];
+        function createWheel(x, z) {
+            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.rotation.z = Math.PI / 2; // Deita o cilindro para virar uma roda
+            wheel.position.set(x, 0.4, z);
+            carGroup.add(wheel);
+            wheels.push(wheel);
+        }
+
+        // Adicionando as 4 rodas
+        createWheel(1.1, 1.2);   // Traseira Direita
+        createWheel(-1.1, 1.2);  // Traseira Esquerda
+        createWheel(1.1, -1.2);  // Dianteira Direita
+        createWheel(-1.1, -1.2); // Dianteira Esquerda
 
         scene.add(carGroup);
 
-        // 3. Física e Controles
-        const carParams = { speed: 0, maxSpeed: 0.5, acceleration: 0.01, friction: 0.005, turnSpeed: 0.05, angle: 0 };
-        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        // 4. Controles à prova de falhas
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
 
-        window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.code) || keys.hasOwnProperty(e.key)) keys[e.code] = true; });
-        window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.code) || keys.hasOwnProperty(e.key)) keys[e.code] = false; });
+        const car = { speed: 0, maxSpeed: 0.8, accel: 0.015, friction: 0.008, angle: 0 };
+        const cameraOffset = new THREE.Vector3(0, 4, 8); // Câmera atrás e acima
 
-        // Câmera segue o carro
-        const cameraOffset = new THREE.Vector3(0, 3, 7);
-
-        // 4. Loop do Jogo
+        // 5. Loop do Jogo
         function animate() {
             requestAnimationFrame(animate);
 
-            // Aceleração
-            if (keys.ArrowUp || keys.KeyW) carParams.speed += carParams.acceleration;
-            if (keys.ArrowDown || keys.KeyS) carParams.speed -= carParams.acceleration;
+            // Acelerar / Frear
+            if (keys['ArrowUp'] || keys['KeyW']) car.speed += car.accel;
+            if (keys['ArrowDown'] || keys['KeyS']) car.speed -= car.accel;
 
-            // Atrito/Fricção
-            if (carParams.speed > 0) carParams.speed -= carParams.friction;
-            if (carParams.speed < 0) carParams.speed += carParams.friction;
-            if (Math.abs(carParams.speed) < carParams.friction) carParams.speed = 0;
+            // Atrito natural (para o carro parar sozinho)
+            if (car.speed > 0) car.speed -= car.friction;
+            if (car.speed < 0) car.speed += car.friction;
+            if (Math.abs(car.speed) < car.friction) car.speed = 0;
 
-            // Limite de velocidade
-            carParams.speed = Math.max(-carParams.maxSpeed / 2, Math.min(carParams.speed, carParams.maxSpeed));
+            // Limitar velocidade
+            car.speed = Math.max(-car.maxSpeed / 2, Math.min(car.speed, car.maxSpeed));
 
-            // Rotação (Só vira se estiver em movimento - Mecânica de Drift pode ser expandida aqui)
-            if (Math.abs(carParams.speed) > 0.01) {
-                const turnMultiplier = carParams.speed > 0 ? 1 : -1; // Inverte direção de ré
-                if (keys.ArrowLeft || keys.KeyA) carParams.angle += carParams.turnSpeed * turnMultiplier;
-                if (keys.ArrowRight || keys.KeyD) carParams.angle -= carParams.turnSpeed * turnMultiplier;
+            // Virar (Só vira se estiver andando)
+            if (Math.abs(car.speed) > 0.02) {
+                // Quanto mais rápido, mais rápido ele vira (ajuste de Kart)
+                const turnSpeed = 0.04 * (car.speed / car.maxSpeed) * (car.speed > 0 ? 1 : -1);
+                
+                // Compensa caso a velocidade seja muito baixa para não virar em câmera lenta
+                const finalTurnSpeed = Math.max(0.02, Math.abs(turnSpeed)) * Math.sign(turnSpeed);
+
+                if (keys['ArrowLeft'] || keys['KeyA']) car.angle += finalTurnSpeed;
+                if (keys['ArrowRight'] || keys['KeyD']) car.angle -= finalTurnSpeed;
             }
 
-            carGroup.rotation.y = carParams.angle;
+            carGroup.rotation.y = car.angle;
 
-            // Movimento baseado no ângulo
-            carGroup.position.x += Math.sin(carParams.angle) * carParams.speed;
-            carGroup.position.z += Math.cos(carParams.angle) * carParams.speed;
+            // Mover o carro no mundo 3D (Z é frente/trás no Three.js)
+            // Como a frente do nosso carro aponta para o -Z, invertemos o seno/cosseno
+            carGroup.position.x += Math.sin(car.angle) * car.speed;
+            carGroup.position.z += Math.cos(car.angle) * car.speed;
 
-            // Fazer o sprite do player sempre olhar para a câmera (efeito Doom/Mario Kart 64)
-            player.lookAt(camera.position);
+            // Animar as rodas girando
+            wheels.forEach(wheel => {
+                wheel.rotation.x -= car.speed * 0.5; // O eixo de rotação da roda agora acompanha a velocidade
+            });
 
-            // Atualiza Câmera
-            const relativeCameraOffset = cameraOffset.clone().applyMatrix4(carGroup.matrixWorld);
-            camera.position.lerp(relativeCameraOffset, 0.1);
+            // Virar as rodas dianteiras visualmente
+            const steerAngle = (keys['ArrowLeft'] || keys['KeyA'] ? 0.4 : 0) + (keys['ArrowRight'] || keys['KeyD'] ? -0.4 : 0);
+            wheels[2].rotation.y = steerAngle; // Dianteira Direita
+            wheels[3].rotation.y = steerAngle; // Dianteira Esquerda
+
+            // Câmera segue o carro suavemente
+            const relativeOffset = cameraOffset.clone().applyMatrix4(carGroup.matrixWorld);
+            camera.position.lerp(relativeOffset, 0.1);
             camera.lookAt(carGroup.position);
 
-            // Atualiza UI
-            document.getElementById('speed').innerText = Math.round(Math.abs(carParams.speed * 200));
+            // Atualiza Velocímetro na tela
+            document.getElementById('speed').innerText = Math.round(Math.abs(car.speed * 150));
 
             renderer.render(scene, camera);
         }
 
         animate();
 
-        // Ajustar tela ao redimensionar
+        // Ajusta a tela se a janela mudar de tamanho
         window.addEventListener('resize', () => {
             renderer.setSize(window.innerWidth, window.innerHeight);
             camera.aspect = window.innerWidth / window.innerHeight;
