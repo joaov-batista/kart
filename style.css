@@ -1,0 +1,22 @@
+:root { --neon: #00ffff; --dark: #050510; }
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+body { overflow: hidden; background: var(--dark); color: #fff; }
+
+.overlay { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; z-index: 100; backdrop-filter: blur(5px); }
+.panel { background: rgba(15, 23, 42, 0.85); padding: 30px; border-radius: 12px; border: 2px solid var(--neon); width: 400px; text-align: center; color: #fff; }
+h1 { color: var(--neon); font-style: italic; margin-bottom: 20px; text-shadow: 0 0 10px var(--neon); }
+
+input, select { width: 100%; padding: 12px; margin: 10px 0; background: #1e293b; border: 1px solid #334155; color: #fff; border-radius: 6px; font-weight: bold;}
+.btn { width: 100%; padding: 15px; border: none; font-weight: bold; font-size: 16px; margin: 10px 0; cursor: pointer; border-radius: 6px; text-transform: uppercase; color: white;}
+.btn-green { background: #10b981; } .btn-blue { background: #3b82f6; } .btn-red { background: #ef4444; }
+
+/* HUD ESTILIZADO */
+#gameUI { display: none; }
+#posHud { position: absolute; top: 20px; right: 30px; font-size: 30px; font-weight: 900; font-style: italic; color: #fff; text-shadow: 2px 2px 0 #000; }
+#healthBarContainer { position: absolute; top: 20px; left: 30px; width: 300px; height: 20px; background: rgba(255,0,0,0.2); border: 2px solid #ef4444; transform: skewX(-20deg); }
+#healthBar { width: 100%; height: 100%; background: #ef4444; transition: width 0.2s; }
+#speedoMeter { position: absolute; bottom: 30px; right: 30px; font-size: 45px; font-weight: 900; font-style: italic; color: var(--neon); text-align: right; text-shadow: 0 0 10px var(--neon); }
+#speedoMeter small { font-size: 16px; color: #fff; }
+#nitroMeter { position: absolute; bottom: 30px; left: 30px; font-size: 24px; font-weight: bold; color: var(--neon); text-shadow: 0 0 10px var(--neon); }
+#eventText { position: absolute; top: 100px; left: 50%; transform: translateX(-50%); font-size: 40px; color: #fff; text-shadow: 0 0 20px red; display: none; font-weight: 900; text-transform: uppercase; }
+#repairScreen { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; font-size: 50px; color: red; z-index: 200; font-weight: 900; }

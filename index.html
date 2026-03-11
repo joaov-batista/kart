@@ -1,197 +1,150 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kart 3D - Pista e Rodas</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #87CEEB; }
-        #ui {
-            position: absolute; top: 10px; left: 10px; color: white;
-            font-family: Arial, sans-serif; text-shadow: 2px 2px 0 #000;
-            background: rgba(0, 0, 0, 0.5); padding: 15px; border-radius: 8px;
-        }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>OVERDRIVE: NEON CHASE</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    :root { --neon: #ff0055; --cyan: #00e5ff; --dark: #020205; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; }
+    body { overflow: hidden; background: var(--dark); color: #fff; touch-action: none; }
+    
+    #bgCanvas { position: absolute; inset: 0; z-index: -1; }
+    
+    /* LOBBY E MULTIPLAYER */
+    .overlay { position: absolute; inset: 0; display: flex; justify-content: flex-start; align-items: center; padding-left: 5vw; z-index: 100; background: linear-gradient(90deg, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.6) 40%, rgba(0,0,0,0) 100%); overflow-y: auto; }
+    .panel { background: rgba(5, 5, 10, 0.85); padding: 25px; border-radius: 12px; border-left: 4px solid var(--neon); width: 90%; max-width: 420px; text-align: left; backdrop-filter: blur(10px); box-shadow: 0 0 40px rgba(255,0,85,0.15); display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+    
+    h1 { color: #fff; font-style: italic; text-transform: uppercase; font-weight: 900; font-size: clamp(28px, 5vw, 36px); letter-spacing: 2px; text-shadow: 0 0 10px var(--neon);}
+    h1 span { color: var(--cyan); text-shadow: 0 0 10px var(--cyan); }
+    
+    input, select { width: 100%; padding: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #fff; font-weight: bold; outline: none; border-radius: 6px; transition: 0.2s;}
+    input:focus, select:focus { border-color: var(--cyan); background: rgba(255,255,255,0.1); }
+    select option { background: #0f172a; color: #fff; font-weight: bold; }
+    
+    .btn { width: 100%; padding: 15px; border: none; font-weight: 900; font-size: 16px; cursor: pointer; text-transform: uppercase; color: white; transition: 0.2s; border-radius: 6px; }
+    .btn:active { transform: scale(0.95); }
+    .btn-green { background: linear-gradient(90deg, #00b09b, #96c93d); box-shadow: 0 0 15px rgba(0,255,150,0.4); }
+    .btn-blue { background: linear-gradient(90deg, #00c6ff, #0072ff); box-shadow: 0 0 15px rgba(0,200,255,0.4); margin-top: 5px; }
+    .btn-red { background: linear-gradient(90deg, #ff0055, #ff0000); box-shadow: 0 0 20px rgba(255,0,85,0.5); }
+
+    .multiplayer-box { display: flex; flex-direction: column; gap: 8px; background: rgba(0,0,0,0.4); padding: 15px; border-radius: 8px; border-left: 2px solid var(--cyan); margin-bottom: 10px; }
+    .multiplayer-box h4 { color: var(--cyan); font-size: 14px; margin-bottom: 5px; text-transform: uppercase; }
+    #playerList { list-style: none; font-size: 13px; color: #ccc; max-height: 80px; overflow-y: auto; }
+    #playerList li { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; }
+    #playerList li span { color: var(--cyan); font-weight: bold; }
+
+    /* HUD IN-GAME */
+    #gameUI { display: none; }
+    #posHud { position: absolute; top: 20px; right: 20px; font-size: clamp(24px, 4vw, 40px); font-weight: 900; font-style: italic; text-shadow: 2px 2px 0 #000; z-index: 10;}
+    
+    #healthBarContainer { position: absolute; top: 20px; left: 20px; width: 40vw; max-width: 300px; height: 15px; background: rgba(255,0,0,0.2); border: 2px solid #ef4444; transform: skewX(-20deg); z-index: 10;}
+    #healthBar { width: 100%; height: 100%; background: #ef4444; transition: width 0.2s; }
+    #skillCdContainer { position: absolute; top: 45px; left: 20px; width: 25vw; max-width: 200px; height: 10px; background: rgba(0,255,255,0.2); border: 1px solid var(--cyan); transform: skewX(-20deg); z-index: 10;}
+    #skillCdBar { width: 100%; height: 100%; background: var(--cyan); transition: width 0.1s; }
+    
+    #speedoMeter { position: absolute; bottom: 30px; right: 20px; font-size: clamp(50px, 8vw, 80px); font-weight: 900; font-style: italic; color: #fff; text-align: right; text-shadow: 0 0 20px var(--cyan); z-index: 10;}
+    #speedoMeter small { font-size: clamp(16px, 3vw, 24px); color: var(--cyan); text-shadow: none; display: block; margin-top: -10px;}
+    
+    #nitroMeter { position: absolute; bottom: 30px; left: 20px; font-size: clamp(24px, 4vw, 35px); font-weight: 900; font-style: italic; color: #fff; text-shadow: 0 0 15px var(--neon); z-index: 10;}
+    
+    #eventText { position: absolute; top: 20vh; left: 50%; transform: translateX(-50%); font-size: clamp(28px, 5vw, 50px); color: #fff; text-shadow: 0 0 25px red; display: none; font-weight: 900; text-transform: uppercase; text-align: center; z-index: 50; width: 100%; pointer-events: none;}
+    #radarAlert { position: absolute; top: 10vh; left: 50%; transform: translateX(-50%); font-size: clamp(18px, 3vw, 35px); color: yellow; text-shadow: 0 0 15px orange; display: none; font-weight: 900; animation: blink 0.3s infinite; z-index: 50; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 8px; pointer-events: none; text-align: center; width: 90%; max-width: 600px;}
+    
+    #blackoutAlert { position: absolute; top: 5vh; left: 50%; transform: translateX(-50%); font-size: clamp(16px, 3vw, 28px); color: #fff; text-shadow: 0 0 15px #fff; display: none; font-weight: 900; z-index: 50; background: rgba(255,0,0,0.8); padding: 10px; border-radius: 8px;}
+    #repairScreen { position: absolute; inset: 0; background: rgba(0,0,0,0.95); display: none; justify-content: center; align-items: center; flex-direction: column; font-size: clamp(35px, 8vw, 70px); color: red; z-index: 200; font-weight: 900; }
+    
+    #policeFlash { position: absolute; inset: 0; z-index: 5; pointer-events: none; display: none; animation: sirens 0.4s infinite; opacity: 0.35; mix-blend-mode: overlay; }
+    #smokeScreen { position: absolute; inset: 0; z-index: 6; pointer-events: none; display: none; background: radial-gradient(circle, rgba(150,150,150,0.95) 0%, rgba(50,50,50,0.98) 100%); }
+
+    /* MOBILE TOUCH */
+    #mobileControls { position: absolute; inset: 0; z-index: 20; pointer-events: none; display: none; }
+    .touch-btn { pointer-events: auto; position: absolute; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.3); color: #fff; font-weight: bold; border-radius: 50%; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(4px); }
+    .touch-btn:active { background: rgba(0,255,255,0.4); border-color: var(--cyan); transform: scale(0.9); }
+    #btnLeft { bottom: 40px; left: 20px; width: 75px; height: 75px; font-size: 28px; }
+    #btnRight { bottom: 40px; left: 120px; width: 75px; height: 75px; font-size: 28px; }
+    #btnBrake { bottom: 140px; left: 70px; width: 60px; height: 60px; font-size: 14px; background: rgba(255,0,0,0.2); border-color: red;}
+    #btnGas { bottom: 40px; right: 20px; width: 85px; height: 85px; font-size: 18px; background: rgba(0,255,255,0.2); border-color: var(--cyan); }
+    #btnNitro { bottom: 150px; right: 20px; width: 70px; height: 70px; font-size: 14px; background: rgba(255,0,85,0.2); border-color: var(--neon); }
+    #btnDrift { bottom: 40px; right: 130px; width: 70px; height: 70px; font-size: 14px; }
+    #btnSpec { bottom: 130px; right: 110px; width: 60px; height: 60px; font-size: 12px; }
+
+    @media (max-width: 768px) { #mobileControls { display: block; } }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes sirens { 0%, 49% { background: red; } 50%, 100% { background: blue; } }
+  </style>
 </head>
 <body>
-    <div id="ui">
-        <h2>Corrida Maluca</h2>
-        <p>Use <b>SETAS</b> ou <b>W A S D</b> para dirigir.</p>
-        <p>Velocidade: <span id="speed">0</span> km/h</p>
+
+  <canvas id="bgCanvas"></canvas>
+  
+  <div id="lobbyUI" class="overlay">
+    <div class="panel">
+      <h1>OVERDRIVE<br><span>NEON CHASE</span></h1>
+
+      <input type="text" id="playerName" placeholder="Nome do Piloto" maxlength="12" value="Piloto">
+      <input type="text" id="playerPlate" placeholder="Sua Placa" maxlength="7" value="UNB10">
+      
+      <select id="carSelect">
+        <option value="mustang.gltf">Mustang GT (Tiro Paralisante)</option>
+        <option value="charger.gltf">Dodge Charger (Debilitador)</option>
+        <option value="porsche911.gltf">Porsche 911 (Fumaça Cegante)</option>
+        <option value="mustangmach1.gltf">Mach 1 (Arremesso Aéreo)</option>
+      </select>
+
+      <select id="nitroSelect">
+        <option value="0x00ffff">Plasma Azul</option>
+        <option value="0xff00ff">Plasma Rosa</option>
+        <option value="0x00ff00">Plasma Verde</option>
+        <option value="rainbow">Arco-Íris (Mesclado)</option>
+        <option value="0x111111" id="optNitroBlack" style="display:none;">Nitro Negro (Raios)</option>
+      </select>
+
+      <div class="multiplayer-box">
+        <h4>MULTIPLAYER ONLINE</h4>
+        <button id="btnHost" class="btn btn-green">Criar Sala (Host)</button>
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="joinCode" placeholder="Código" maxlength="6" style="margin:0;">
+            <button id="btnJoin" class="btn btn-blue" style="margin:0; width:auto; padding: 12px;">Entrar</button>
+        </div>
+        <div id="roomInfo" style="display:none; color: var(--cyan); font-weight: bold; margin-top: 10px;">
+            SALA: <span id="displayCode" style="color:#fff; letter-spacing: 2px;">---</span>
+        </div>
+        <ul id="playerList"></ul>
+      </div>
+
+      <button id="btnStart" class="btn btn-red" style="display:none;">INICIAR CORRIDA MUNDIAL!</button>
     </div>
+  </div>
 
-    <script>
-        // 1. Configuração do Mundo 3D
-        const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x87ceeb, 0.005);
+  <div id="gameUI">
+    <div id="policeFlash"></div>
+    <div id="smokeScreen"></div>
+    <div id="posHud">POS: <span id="racePos">1</span></div>
+    <div id="healthBarContainer"><div id="healthBar"></div></div>
+    <div id="skillCdContainer"><div id="skillCdBar"></div></div>
+    <div id="blackoutAlert">⚠️ APAGÃO! LIGUE OS FARÓIS (L) ⚠️</div>
+    <div id="radarAlert">⚠️ RADAR 500m! LIMITE: 150 KM/H ⚠️</div>
+    <div id="speedoMeter"><span id="speedVal">0</span><br><small>KM/H</small></div>
+    <div id="nitroMeter">NITRO <span id="nitroVal">100</span>%</div>
+    <div id="eventText"></div>
+    <div id="repairScreen">DESTRUÍDO!<div style="font-size: clamp(16px, 4vw, 30px); color: white; margin-top: 10px;">OFICINA EM <span id="repairTimer">5</span>s</div></div>
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
+    <div id="mobileControls">
+      <div class="touch-btn" id="btnLeft">◀</div>
+      <div class="touch-btn" id="btnRight">▶</div>
+      <div class="touch-btn" id="btnBrake">FREIO</div>
+      <div class="touch-btn" id="btnGas">GAS</div>
+      <div class="touch-btn" id="btnNitro">NITRO</div>
+      <div class="touch-btn" id="btnDrift">DRIFT</div>
+      <div class="touch-btn" id="btnSpec">ESP</div>
+    </div>
+  </div>
 
-        // Luzes
-        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(50, 100, 50);
-        scene.add(dirLight);
-
-        // 2. Criando o Mapa (Pista em formato de 8 usando Canvas)
-        function createTrackTexture() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 1024;
-            canvas.height = 1024;
-            const ctx = canvas.getContext('2d');
-
-            // Fundo de grama
-            ctx.fillStyle = '#4CAF50';
-            ctx.fillRect(0, 0, 1024, 1024);
-
-            // Configuração do asfalto
-            ctx.strokeStyle = '#333333';
-            ctx.lineWidth = 120;
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
-
-            // Desenhando o formato de "8"
-            ctx.beginPath();
-            ctx.arc(300, 512, 220, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(724, 512, 220, 0, Math.PI * 2);
-            ctx.stroke();
-
-            // Faixa central tracejada branca
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.lineWidth = 6;
-            ctx.setLineDash([30, 30]);
-            ctx.beginPath();
-            ctx.arc(300, 512, 220, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(724, 512, 220, 0, Math.PI * 2);
-            ctx.stroke();
-
-            const texture = new THREE.CanvasTexture(canvas);
-            // Faz a textura repetir corretamente no plano
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            return texture;
-        }
-
-        const groundGeo = new THREE.PlaneGeometry(300, 300);
-        const groundMat = new THREE.MeshStandardMaterial({ map: createTrackTexture() });
-        const ground = new THREE.Mesh(groundGeo, groundMat);
-        ground.rotation.x = -Math.PI / 2;
-        scene.add(ground);
-
-        // 3. Criando o Carro com Rodas
-        const carGroup = new THREE.Group();
-        
-        // Chassi (Corpo do carro)
-        const chassiMat = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Carro Vermelho
-        const chassi = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 4), chassiMat);
-        chassi.position.y = 0.5;
-        carGroup.add(chassi);
-
-        // Cabine
-        const cabine = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 1.5), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-        cabine.position.set(0, 1, -0.5);
-        carGroup.add(cabine);
-
-        // Função para criar rodas
-        const wheels = [];
-        function createWheel(x, z) {
-            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
-            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-            wheel.rotation.z = Math.PI / 2; // Deita o cilindro para virar uma roda
-            wheel.position.set(x, 0.4, z);
-            carGroup.add(wheel);
-            wheels.push(wheel);
-        }
-
-        // Adicionando as 4 rodas
-        createWheel(1.1, 1.2);   // Traseira Direita
-        createWheel(-1.1, 1.2);  // Traseira Esquerda
-        createWheel(1.1, -1.2);  // Dianteira Direita
-        createWheel(-1.1, -1.2); // Dianteira Esquerda
-
-        scene.add(carGroup);
-
-        // 4. Controles à prova de falhas
-        const keys = {};
-        window.addEventListener('keydown', (e) => keys[e.code] = true);
-        window.addEventListener('keyup', (e) => keys[e.code] = false);
-
-        const car = { speed: 0, maxSpeed: 0.8, accel: 0.015, friction: 0.008, angle: 0 };
-        const cameraOffset = new THREE.Vector3(0, 4, 8); // Câmera atrás e acima
-
-        // 5. Loop do Jogo
-        function animate() {
-            requestAnimationFrame(animate);
-
-            // Acelerar / Frear
-            if (keys['ArrowUp'] || keys['KeyW']) car.speed += car.accel;
-            if (keys['ArrowDown'] || keys['KeyS']) car.speed -= car.accel;
-
-            // Atrito natural (para o carro parar sozinho)
-            if (car.speed > 0) car.speed -= car.friction;
-            if (car.speed < 0) car.speed += car.friction;
-            if (Math.abs(car.speed) < car.friction) car.speed = 0;
-
-            // Limitar velocidade
-            car.speed = Math.max(-car.maxSpeed / 2, Math.min(car.speed, car.maxSpeed));
-
-            // Virar (Só vira se estiver andando)
-            if (Math.abs(car.speed) > 0.02) {
-                // Quanto mais rápido, mais rápido ele vira (ajuste de Kart)
-                const turnSpeed = 0.04 * (car.speed / car.maxSpeed) * (car.speed > 0 ? 1 : -1);
-                
-                // Compensa caso a velocidade seja muito baixa para não virar em câmera lenta
-                const finalTurnSpeed = Math.max(0.02, Math.abs(turnSpeed)) * Math.sign(turnSpeed);
-
-                if (keys['ArrowLeft'] || keys['KeyA']) car.angle += finalTurnSpeed;
-                if (keys['ArrowRight'] || keys['KeyD']) car.angle -= finalTurnSpeed;
-            }
-
-            carGroup.rotation.y = car.angle;
-
-            // Mover o carro no mundo 3D (Z é frente/trás no Three.js)
-            // Como a frente do nosso carro aponta para o -Z, invertemos o seno/cosseno
-            carGroup.position.x += Math.sin(car.angle) * car.speed;
-            carGroup.position.z += Math.cos(car.angle) * car.speed;
-
-            // Animar as rodas girando
-            wheels.forEach(wheel => {
-                wheel.rotation.x -= car.speed * 0.5; // O eixo de rotação da roda agora acompanha a velocidade
-            });
-
-            // Virar as rodas dianteiras visualmente
-            const steerAngle = (keys['ArrowLeft'] || keys['KeyA'] ? 0.4 : 0) + (keys['ArrowRight'] || keys['KeyD'] ? -0.4 : 0);
-            wheels[2].rotation.y = steerAngle; // Dianteira Direita
-            wheels[3].rotation.y = steerAngle; // Dianteira Esquerda
-
-            // Câmera segue o carro suavemente
-            const relativeOffset = cameraOffset.clone().applyMatrix4(carGroup.matrixWorld);
-            camera.position.lerp(relativeOffset, 0.1);
-            camera.lookAt(carGroup.position);
-
-            // Atualiza Velocímetro na tela
-            document.getElementById('speed').innerText = Math.round(Math.abs(car.speed * 150));
-
-            renderer.render(scene, camera);
-        }
-
-        animate();
-
-        // Ajusta a tela se a janela mudar de tamanho
-        window.addEventListener('resize', () => {
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-        });
-    </script>
+  <script src="main.js"></script>
 </body>
 </html>
