@@ -1,5 +1,5 @@
 // ==========================================
-// CONFIGURAÇÃO GLOBAL E REDE PEERJS
+// 1. SETUP GERAL E VARIÁVEIS GLOBAIS (CORRIGIDO)
 // ==========================================
 const canvas = document.getElementById('bgCanvas');
 const scene = new THREE.Scene();
@@ -8,22 +8,21 @@ const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerH
 const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); 
 scene.add(ambientLight);
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
 dirLight.position.set(100, 200, 50);
 scene.add(dirLight);
 
-// Rede
-let peer = null;
-let myId = '';
-let isHost = false;
-let hostConn = null;
-let connections = {}; // Usado pelo Host
-let roomPlayers = []; // { id, name, carModel, nitroColor }
-let networkCars = {}; // Instâncias 3D dos outros jogadores
-
-// Estados do Jogo
+// VARIÁVEIS GLOBAIS (Aqui está a correção do lastTime e wins!)
+let lastTime = performance.now();
+let wins = parseInt(localStorage.getItem('polyWins') || '0');
 let screenShake = 0; 
 let isRaining = false;
 let rainTimer = 0;
@@ -32,9 +31,22 @@ let blackoutTimer = 0;
 let camMode = 0; 
 let gameState = 'lobby'; 
 let localCar = null;
+let hasFinished = false;
+
+// Redes e Multiplayer
+let peer = null;
+let myId = '';
+let isHost = false;
+let hostConn = null;
+let connections = {}; 
+let roomPlayers = []; 
+let networkCars = {}; 
+let trackItems = []; 
+let radars = [];
+let wallL, wallR;
 
 // ==========================================
-// CÉU ESTRELADO E TEXTURAS
+// 2. CÉU ESTRELADO E TEXTURAS
 // ==========================================
 const starsGeo = new THREE.BufferGeometry();
 const starsArr = new Float32Array(6000 * 3);
@@ -61,7 +73,7 @@ function createParticleTex() {
 const particleTex = createParticleTex();
 
 // ==========================================
-// VFX MANAGER (Sincronizado na Rede)
+// 3. VFX MANAGER
 // ==========================================
 class VFXManager {
     constructor(scene) {
@@ -75,18 +87,23 @@ class VFXManager {
         const isNitro = type.includes('nitro');
         let colorHex = colorVal;
         let isBlack = false;
+        let isStardust = false;
 
         if (colorVal === 'rainbow') {
             const time = performance.now() * 0.005;
             colorHex = (Math.floor(Math.sin(time)*127+128)<<16) | (Math.floor(Math.sin(time+2)*127+128)<<8) | Math.floor(Math.sin(time+4)*127+128);
         } else if (colorVal === '0x111111' || colorVal === 0x111111) {
             isBlack = true; colorHex = 0x111111;
+        } else if (colorVal === 'stardust') {
+            isStardust = true; colorHex = 0x050510;
         }
 
+        const useAdditive = isNitro && !isBlack && !isStardust;
+        const opacityBase = type === 'smoke_light' ? 0.15 : (isNitro ? 1.0 : 0.35);
+        
         const mat = new THREE.SpriteMaterial({ 
             map: particleTex, color: colorHex, transparent: true, 
-            opacity: type === 'smoke_light' ? 0.15 : (isNitro ? 1.0 : 0.35), 
-            blending: (isNitro && !isBlack) ? THREE.AdditiveBlending : THREE.NormalBlending
+            opacity: opacityBase, blending: useAdditive ? THREE.AdditiveBlending : THREE.NormalBlending
         });
         
         const p = new THREE.Sprite(mat);
@@ -95,7 +112,7 @@ class VFXManager {
         const spread = isNitro ? 0.15 : (type === 'smoke_light' ? 0.4 : 1.2);
         p.userData = {
             velocity: new THREE.Vector3((Math.random()-0.5)*spread, (Math.random()-0.5)*spread, isNitro ? Math.random()*2.5 : (Math.random()-0.5)*1.5).add(forwardVel),
-            life: mat.opacity,
+            life: opacityBase,
             initialType: type,
             scaleXSpeed: isNitro ? 0.8 : 1.03, scaleYSpeed: isNitro ? 0.8 : 1.03 
         };
@@ -111,6 +128,14 @@ class VFXManager {
             light.userData = { velocity: forwardVel.clone(), life: 0.25, scaleXSpeed: 0.5, scaleYSpeed: 0.5, initialType: 'lightning' };
             this.scene.add(light);
             this.particles.push(light);
+        } else if (isStardust && Math.random() < 0.8) {
+            const starMat = new THREE.SpriteMaterial({ map: particleTex, color: Math.random()>0.5?0x00ffff:0xffffff, blending: THREE.AdditiveBlending });
+            const star = new THREE.Sprite(starMat);
+            star.position.copy(pos).add(new THREE.Vector3((Math.random()-0.5)*3, (Math.random()-0.5)*3, (Math.random()-0.5)*3));
+            star.userData = { velocity: forwardVel.clone(), life: 0.4, scaleXSpeed: 0.9, scaleYSpeed: 0.9, initialType: 'lightning' };
+            star.scale.set(0.6, 0.6, 0.6);
+            this.scene.add(star);
+            this.particles.push(star);
         }
     }
 
@@ -172,7 +197,6 @@ class VFXManager {
 }
 const vfx = new VFXManager(scene);
 
-// Wrapper de rede para VFX
 function spawnNetworkVFX(pos, type, color, vel = new THREE.Vector3()) {
     vfx.spawn(pos, type, color, vel);
     if(gameState === 'playing') {
@@ -181,8 +205,15 @@ function spawnNetworkVFX(pos, type, color, vel = new THREE.Vector3()) {
 }
 
 // ==========================================
-// CLASSE DO CARRO E FÍSICA PRO (INÉRCIA PERFEITA)
+// 4. CLASSE DO CARRO E FÍSICA
 // ==========================================
+const CAR_DATA = {
+    'mustang.gltf': { accel: 130, topSpeed: 210, nitro: 100, skillDesc: 'Tiro Paralisante', spdBar: '70%', accBar: '80%', nitBar: '70%' },
+    'charger.gltf': { accel: 140, topSpeed: 230, nitro: 80, skillDesc: 'Boost Debilitante', spdBar: '80%', accBar: '95%', nitBar: '50%' },
+    'porsche911.gltf': { accel: 120, topSpeed: 240, nitro: 100, skillDesc: 'Fumaça Cegante', spdBar: '95%', accBar: '70%', nitBar: '70%' },
+    'mustangmach1.gltf': { accel: 135, topSpeed: 220, nitro: 130, skillDesc: 'Arremesso Aéreo', spdBar: '75%', accBar: '85%', nitBar: '95%' }
+};
+
 class Car {
     constructor(modelName, plate, nitroColor, isLocal) {
         this.modelName = modelName;
@@ -196,7 +227,7 @@ class Car {
         this.speed = 0;
         this.vy = 0; 
         this.pitch = 0; 
-        this.steering = 0; // Inércia do volante
+        this.steering = 0; 
         
         this.headlightsOn = false;
         this.headlightToggleCd = 0;
@@ -226,7 +257,6 @@ class Car {
                 if (name.includes("roda_fundo_direita")) this.rearRWheel = child;
                 
                 if (name.includes("farol_") && name.includes("frente")) {
-                    // FAROL POTENTE QUE CLAREIA TUDO
                     const sl = new THREE.SpotLight(0xffffff, 0, 3000, Math.PI/3, 0.2, 1);
                     child.add(sl);
                     const target = new THREE.Object3D();
@@ -239,8 +269,12 @@ class Car {
         });
     }
 
-    updateLocal(dt, keys) {
+    updateLocal(dt, keys, carData, plate) {
         if (this.isDead) return;
+
+        let maxN = carData.nitro;
+        let baseSpd = carData.topSpeed;
+        if (plate.toUpperCase() === "UNB10") { maxN += 50; baseSpd += 30; }
 
         if (this.wheels.length > 0) this.wheels.forEach(w => w.rotation.x -= this.speed * dt * 0.08);
 
@@ -253,7 +287,7 @@ class Car {
 
         if (this.skillCooldown > 0) this.skillCooldown -= dt;
         if (this.boostTimer > 0) this.boostTimer -= dt;
-        this.nitro = Math.min(100, this.nitro + 12 * dt);
+        this.nitro = Math.min(maxN, this.nitro + 12 * dt);
 
         if (this.stunTimer > 0) {
             this.stunTimer -= dt;
@@ -298,15 +332,14 @@ class Car {
             return;
         }
 
-        // --- FÍSICA MELHORADA DE ALTA VELOCIDADE ---
-        let currentMax = 220 * Math.max(0.4, (this.health / 100)); 
+        let currentMax = baseSpd * Math.max(0.4, (this.health / 100)); 
         if (this.boostTimer > 0) currentMax = 350; 
 
-        if (keys.w && this.dashTimer <= 0) this.speed += 120 * dt; 
-        else if (keys.s && this.dashTimer <= 0) this.speed -= 180 * dt; 
-        else this.speed -= this.speed * 0.5 * dt; // Atrito natural
+        if (keys.w && this.dashTimer <= 0) this.speed += carData.accel * dt; 
+        else if (keys.s && this.dashTimer <= 0) this.speed -= (carData.accel * 1.5) * dt; 
+        else this.speed -= this.speed * 0.5 * dt; 
         
-        if (keys.f) this.speed = THREE.MathUtils.lerp(this.speed, 0, dt * 5); // Freio forte
+        if (keys.f) this.speed = THREE.MathUtils.lerp(this.speed, 0, dt * 5); 
 
         if (this.dashTimer <= 0) {
             if (this.speed > currentMax) this.speed = THREE.MathUtils.lerp(this.speed, currentMax, dt * 2);
@@ -314,19 +347,16 @@ class Car {
         }
 
         if (keys[' '] && this.dashTimer <= 0) this.useNitro(dt);
-
         if (keys.q) { this.speed = 10; this.mesh.rotation.y += 7.0 * dt; this.emitSmokeFromTires(); }
         if (this.speed > 80 && !this.isDrifting && Math.random() < 0.3) this.emitLightSmoke();
 
-        // CONTROLE DE DIREÇÃO MAIS DURO EM ALTA VELOCIDADE PARA NÃO RODAR FÁCIL
-        // Grip vai de 1.0 (devagar) até 0.4 (muito rápido)
         const grip = Math.max(0.4, 1.0 - (this.speed / 500));
         let maxTurnSpeed = 2.5 * grip; 
         let slideVector = 0; 
         
         this.isDrifting = keys.shift && this.speed > 80;
         if (this.isDrifting) {
-            maxTurnSpeed = 4.0 * grip; // Drift vira mais rápido
+            maxTurnSpeed = 4.0 * grip; 
             this.emitSmokeFromTires();
         }
 
@@ -342,7 +372,6 @@ class Car {
         if (keys.a) targetSteer = maxTurnSpeed;
         if (keys.d) targetSteer = -maxTurnSpeed;
         
-        // Volante macio
         this.steering += (targetSteer - this.steering) * 8 * dt;
         this.mesh.rotateY(this.steering * dt);
 
@@ -389,15 +418,12 @@ class Car {
 
     triggerSpecial() {
         showEventMsg("ESPECIAL ATIVADO!", 0x00ffff);
-        broadcastNetwork({ action: 'special', model: this.modelName, pos: this.mesh.position });
-        // Simula local também para inimigos próximos
+        let targetId = null; let minDist = 150; 
         for(let id in networkCars) {
-            let oCar = networkCars[id];
-            if(oCar.mesh.position.distanceTo(this.mesh.position) < 150) {
-                if(this.modelName === 'mustang.gltf') spawnNetworkVFX(oCar.mesh.position, 'lightning', 0x00ffff);
-                if(this.modelName === 'mustangmach1.gltf') oCar.mesh.position.y += 30;
-            }
+            let dist = networkCars[id].mesh.position.distanceTo(this.mesh.position);
+            if(dist < minDist) { minDist = dist; targetId = id; }
         }
+        if (targetId) broadcastNetwork({ action: 'specialHit', target: targetId, model: this.modelName });
     }
 
     takeDamage(amount) {
@@ -425,63 +451,63 @@ class Car {
 }
 
 // ==========================================
-// PISTA, PAREDES LASER E RADARES
+// 5. GERAÇÃO DE PISTA MULTIPLAYER (Sincronizada e com Neon)
 // ==========================================
-const trackItems = [];
-const radars = [];
-let wallL, wallR; 
+function generateTrackData() {
+    const data = [];
+    for(let i=1; i<200; i++) {
+        const zPos = -i * 140; const rand = Math.random();
+        if (rand < 0.2) data.push({ id: i, type: 'ramp', x: (Math.random()-0.5)*40, z: zPos, width: 20, depth: 15 });
+        else if (rand < 0.3) data.push({ id: i, type: 'health', x: (Math.random()-0.5)*50, z: zPos, width: 6, depth: 6 });
+        else if (rand < 0.5) data.push({ id: i, type: 'slow', x: (Math.random()-0.5)*40, z: zPos, width: 30, depth: 30 });
+        else if (rand < 0.55) data.push({ id: i, type: 'boost', x: (Math.random()-0.5)*40, z: zPos, width: 20, depth: 40 });
+        else if (rand < 0.9) data.push({ id: i, type: 'damage', damage: 40, x: (Math.random()-0.5)*50, z: zPos, width: 25, depth: 5 });
+        if (i % 10 === 0) radars.push(zPos);
+    }
+    return data;
+}
 
-function buildTrack() {
+function buildTrackFromData(data) {
     const trackGeo = new THREE.PlaneGeometry(80, 30000);
     const trackMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
     const track = new THREE.Mesh(trackGeo, trackMat);
-    track.rotation.x = -Math.PI / 2;
-    track.position.z = -15000;
-    scene.add(track);
+    track.rotation.x = -Math.PI / 2; track.position.z = -15000; scene.add(track);
 
+    // PAREDES NEON VISÍVEIS
     const wallGeo = new THREE.BoxGeometry(2, 20, 30000);
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xff0055, wireframe: true, transparent: true, opacity: 0.0 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xff0055, wireframe: true, transparent: true, opacity: 1.0, emissive: 0xff0055, emissiveIntensity: 1.0 }); 
     wallL = new THREE.Mesh(wallGeo, wallMat); wallL.position.set(-41, 10, -15000); scene.add(wallL);
     wallR = new THREE.Mesh(wallGeo, wallMat); wallR.position.set(41, 10, -15000); scene.add(wallR);
 
     const finishLine = new THREE.Mesh(new THREE.PlaneGeometry(80, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, map: createCheckeredTex() }));
     finishLine.rotation.x = -Math.PI/2; finishLine.position.set(0, 0.2, -28000); scene.add(finishLine);
 
-    for(let i=1; i<200; i++) {
-        const zPos = -i * 140;
-        const rand = Math.random();
+    data.forEach(item => {
+        let mesh;
+        if (item.type === 'ramp') {
+            mesh = new THREE.Mesh(new THREE.BoxGeometry(item.width, 4, item.depth), new THREE.MeshStandardMaterial({ color: 0xffff00 }));
+            mesh.position.set(item.x, 1.0, item.z); mesh.rotation.x = 0.3; 
+        } else if (item.type === 'health') {
+            mesh = new THREE.Mesh(new THREE.BoxGeometry(item.width, 6, item.depth), new THREE.MeshStandardMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 }));
+            mesh.position.set(item.x, 3, item.z);
+        } else if (item.type === 'slow') {
+            mesh = new THREE.Mesh(new THREE.PlaneGeometry(item.width, item.depth), new THREE.MeshStandardMaterial({ color: 0x331100 }));
+            mesh.rotation.x = -Math.PI / 2; mesh.position.set(item.x, 0.2, item.z);
+        } else if (item.type === 'boost') {
+            mesh = new THREE.Mesh(new THREE.PlaneGeometry(item.width, item.depth), new THREE.MeshStandardMaterial({ color: 0x00e5ff }));
+            mesh.rotation.x = -Math.PI / 2; mesh.position.set(item.x, 0.2, item.z);
+        } else if (item.type === 'damage') {
+            mesh = new THREE.Mesh(new THREE.BoxGeometry(item.width, 10, item.depth), new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+            mesh.position.set(item.x, 5, item.z);
+        }
+        scene.add(mesh);
+        trackItems.push({ ...item, mesh });
+    });
 
-        if (rand < 0.2) { 
-            const rampa = new THREE.Mesh(new THREE.BoxGeometry(20, 4, 15), new THREE.MeshStandardMaterial({ color: 0xffff00 }));
-            rampa.position.set((Math.random()-0.5)*40, 1.0, zPos); rampa.rotation.x = 0.3; 
-            scene.add(rampa); trackItems.push({ mesh: rampa, type: 'ramp', x: rampa.position.x, z: zPos, width: 20, depth: 15 }); 
-        } 
-        else if (rand < 0.3) { 
-            const hb = new THREE.Mesh(new THREE.BoxGeometry(6, 6, 6), new THREE.MeshStandardMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 }));
-            hb.position.set((Math.random()-0.5)*50, 3, zPos); scene.add(hb);
-            trackItems.push({ mesh: hb, type: 'health', x: hb.position.x, z: zPos, width: 6, depth: 6 });
-        }
-        else if (rand < 0.5) { 
-            const slow = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.MeshStandardMaterial({ color: 0x331100 }));
-            slow.rotation.x = -Math.PI / 2; slow.position.set((Math.random()-0.5)*40, 0.2, zPos); scene.add(slow);
-            trackItems.push({ mesh: slow, type: 'slow', x: slow.position.x, z: zPos, width: 30, depth: 30 });
-        }
-        else if (rand < 0.55) { // Pad Azul Nerfado
-            const boost = new THREE.Mesh(new THREE.PlaneGeometry(20, 40), new THREE.MeshStandardMaterial({ color: 0x00e5ff }));
-            boost.rotation.x = -Math.PI / 2; boost.position.set((Math.random()-0.5)*40, 0.2, zPos); scene.add(boost);
-            trackItems.push({ mesh: boost, type: 'boost', x: boost.position.x, z: zPos, width: 20, depth: 40 });
-        }
-        else if (rand < 0.9) { 
-            const wall = new THREE.Mesh(new THREE.BoxGeometry(25, 10, 5), new THREE.MeshStandardMaterial({ color: 0xff0055 }));
-            wall.position.set((Math.random()-0.5)*50, 5, zPos); scene.add(wall);
-            trackItems.push({ mesh: wall, type: 'damage', damage: 40, x: wall.position.x, z: zPos, width: 25, depth: 5 });
-        }
-
-        if (i % 10 === 0) {
-            const radar = new THREE.Mesh(new THREE.BoxGeometry(80, 2, 2), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
-            radar.position.set(0, 15, zPos); scene.add(radar); radars.push(zPos);
-        }
-    }
+    radars.forEach(zPos => {
+        const radar = new THREE.Mesh(new THREE.BoxGeometry(80, 2, 2), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+        radar.position.set(0, 15, zPos); scene.add(radar);
+    });
 }
 
 function createCheckeredTex() {
@@ -491,23 +517,178 @@ function createCheckeredTex() {
 }
 
 // ==========================================
-// POLICE MANAGER (ZIGUE-ZAGUE E ERROS)
+// 6. REDE E LOBBY (EXPOSITOR GIGANTE)
 // ==========================================
-let policeCar = null;
-let policeActive = false;
-let policeTimer = 0;
+const keys = {};
+window.addEventListener('keydown', e => { if(e.key === 'F1') { e.preventDefault(); camMode = camMode === 0 ? 1 : 0; } keys[e.key.toLowerCase()] = true; if(e.key === ' ') keys[' '] = true; });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; if(e.key === ' ') keys[' '] = false; });
+window.addEventListener('mousedown', e => { if(e.button === 0) keys.m1 = true; });
+window.addEventListener('mouseup', e => { if(e.button === 0) keys.m1 = false; });
+
+const touchMap = { 'btnLeft': 'a', 'btnRight': 'd', 'btnGas': 'w', 'btnBrake': 'f', 'btnNitro': ' ', 'btnDrift': 'shift', 'btnSpec': 'e', 'btnDash': 'm1' };
+for(let id in touchMap) {
+    const el = document.getElementById(id);
+    if(el) {
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[touchMap[id]] = true; });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); keys[touchMap[id]] = false; });
+    }
+}
+
+function initLobby() {
+    document.getElementById('btnHost').onclick = setupHost;
+    document.getElementById('btnJoin').onclick = setupClient;
+    document.getElementById('btnStart').onclick = () => { 
+        const trackData = generateTrackData();
+        broadcastNetwork({action: 'start', trackData}); 
+        startGame(trackData); 
+    };
+    
+    document.getElementById('winBadge').innerText = `VITÓRIAS: ${wins}`;
+    if (wins >= 10) document.getElementById('optStardust').style.display = 'block';
+
+    const select = document.getElementById('carSelect');
+    select.addEventListener('change', () => {
+        const data = CAR_DATA[select.value];
+        document.getElementById('cardName').innerText = select.options[select.selectedIndex].text;
+        document.getElementById('cardSkill').innerText = `ESPECIAL (E): ${data.skillDesc}`;
+        document.getElementById('barSpd').style.width = data.spdBar;
+        document.getElementById('barAcc').style.width = data.accBar;
+        document.getElementById('barNit').style.width = data.nitBar;
+
+        if(select.value === 'mustangmach1.gltf') document.getElementById('optNitroBlack').style.display = 'block';
+        else { document.getElementById('optNitroBlack').style.display = 'none'; if(document.getElementById('nitroSelect').value === '0x111111') document.getElementById('nitroSelect').value = '0x00ffff'; }
+    });
+
+    // PÓDIO E LUZES NFS HEAT
+    const pGroup = new THREE.Group(); pGroup.position.set(12, -4, -18); // Posicionado à direita
+    
+    // Geometria de túnel neon
+    const neonMat = new THREE.MeshBasicMaterial({color: 0x00e5ff});
+    const pinkMat = new THREE.MeshBasicMaterial({color: 0xff0055});
+    for(let i=0; i<8; i++) {
+        const hex = new THREE.Mesh(new THREE.TorusGeometry(12, 0.2, 4, 6), i%2===0?neonMat:pinkMat);
+        hex.position.set(0, 5, -5 - (i*8));
+        hex.rotation.z = Math.PI/2;
+        pGroup.add(hex);
+    }
+    
+    pGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(10, 11, 2, 64), new THREE.MeshStandardMaterial({color: 0x111111, metalness: 0.9, roughness: 0.1})));
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(10.2, 0.3, 16, 100), new THREE.MeshBasicMaterial({color: 0x00e5ff}));
+    ring.rotation.x = Math.PI/2; ring.position.y = 1; pGroup.add(ring); scene.add(pGroup);
+
+    const sl1 = new THREE.SpotLight(0x00e5ff, 8.0, 200, Math.PI/3, 0.5, 1); sl1.position.set(5, 20, -5); sl1.target.position.set(12, 0, -18);
+    const sl2 = new THREE.SpotLight(0xff0055, 8.0, 200, Math.PI/3, 0.5, 1); sl2.position.set(20, 20, -5); sl2.target.position.set(12, 0, -18);
+    scene.add(sl1); scene.add(sl1.target); scene.add(sl2); scene.add(sl2.target);
+
+    function loadLobbyCar() {
+        if(window.lobbyCar) pGroup.remove(window.lobbyCar);
+        new THREE.GLTFLoader().load(`models/${select.value}`, (gltf) => {
+            window.lobbyCar = gltf.scene; window.lobbyCar.scale.set(5.5, 5.5, 5.5); window.lobbyCar.position.set(0, 1.2, 0); pGroup.add(window.lobbyCar);
+        });
+    }
+    select.addEventListener('change', loadLobbyCar); loadLobbyCar();
+    window.lobbyPodium = pGroup;
+}
+
+function setupHost() {
+    isHost = true; myId = Math.floor(100000 + Math.random() * 900000).toString();
+    peer = new Peer(myId);
+    peer.on('open', id => {
+        document.getElementById('btnHost').style.display = 'none'; document.getElementById('btnJoin').style.display = 'none';
+        document.getElementById('joinCode').style.display = 'none'; document.getElementById('roomInfo').style.display = 'block';
+        document.getElementById('btnStart').style.display = 'block'; document.getElementById('displayCode').innerText = id;
+        addPlayerToList(id, document.getElementById('playerName').value || 'Host');
+    });
+    peer.on('connection', conn => { connections[conn.peer] = conn; conn.on('data', data => handleNetworkData(data, conn.peer)); });
+}
+
+function setupClient() {
+    const code = document.getElementById('joinCode').value; if(!code) return;
+    peer = new Peer();
+    peer.on('open', id => {
+        myId = id; hostConn = peer.connect(code);
+        hostConn.on('open', () => {
+            document.getElementById('btnHost').style.display = 'none'; document.getElementById('btnJoin').style.display = 'none';
+            document.getElementById('joinCode').style.display = 'none'; document.getElementById('roomInfo').style.display = 'block';
+            document.getElementById('displayCode').innerText = code;
+            hostConn.send({action: 'join', name: document.getElementById('playerName').value || 'Player', car: document.getElementById('carSelect').value });
+        });
+        hostConn.on('data', data => handleNetworkData(data, code));
+    });
+}
+
+function handleNetworkData(data, senderId) {
+    if (isHost) {
+        if (data.action === 'join') { addPlayerToList(senderId, data.name); broadcastNetwork({action: 'lobbySync', players: roomPlayers}); }
+        if (data.action === 'update' || data.action === 'vfx' || data.action === 'specialHit' || data.action === 'consumeItem') { broadcastNetwork(data, senderId); applyNetworkData(data, senderId); }
+    } else {
+        if (data.action === 'lobbySync') { document.getElementById('playerList').innerHTML = ''; data.players.forEach(p => addPlayerToList(p.id, p.name, true)); }
+        if (data.action === 'start') startGame(data.trackData);
+        if (data.action === 'triggerEvent') triggerEventSync(data.event);
+        if (data.action === 'update' || data.action === 'vfx' || data.action === 'specialHit' || data.action === 'consumeItem') applyNetworkData(data, senderId);
+    }
+}
+
+function broadcastNetwork(data, ignoreId = null) {
+    if (isHost) { for(let id in connections) { if(id !== ignoreId && connections[id].open) connections[id].send(data); } } 
+    else if (hostConn && hostConn.open) { hostConn.send(data); }
+}
+
+function applyNetworkData(data, senderId) {
+    if(data.action === 'update') {
+        if(!networkCars[data.id]) networkCars[data.id] = new Car(data.car, 'NET', data.nitro, false);
+        networkCars[data.id].mesh.position.set(data.x, data.y, data.z); networkCars[data.id].mesh.rotation.y = data.rotY; networkCars[data.id].mesh.children[0].rotation.x = data.rotX;
+    }
+    if(data.action === 'vfx') vfx.spawn(new THREE.Vector3(data.pos.x, data.pos.y, data.pos.z), data.type, data.color, new THREE.Vector3(data.vel.x, data.vel.y, data.vel.z));
+    
+    if(data.action === 'specialHit' && data.target === myId) {
+        showEventMsg("VOCÊ FOI ATINGIDO!", 0xff0000); screenShake = 8;
+        if(data.model === 'mustang.gltf') { spawnNetworkVFX(localCar.mesh.position, 'lightning', 0x00ffff); localCar.stunTimer = 1.0; }
+        if(data.model === 'charger.gltf') localCar.stunTimer = 1.0;
+        if(data.model === 'porsche911.gltf') { document.getElementById('smokeScreen').style.display='block'; setTimeout(()=>document.getElementById('smokeScreen').style.display='none', 1000); }
+        if(data.model === 'mustangmach1.gltf') localCar.vy = 60;
+    }
+
+    if(data.action === 'consumeItem') {
+        const index = trackItems.findIndex(i => i.id === data.itemId);
+        if(index > -1) { scene.remove(trackItems[index].mesh); trackItems.splice(index, 1); }
+    }
+}
+
+function triggerEventSync(type) {
+    if(type === 'rain') { rainTimer = 15; isRaining = true; vfx.createRain(); showEventMsg("CHUVA! PISTA ESCORREGADIA!", 0x0055ff); }
+    if(type === 'blackout') { blackoutTimer = 15; isBlackout = true; document.getElementById('blackoutAlert').style.display = 'block'; }
+}
+
+function addPlayerToList(id, name, isSync = false) {
+    if(!isSync) roomPlayers.push({id, name, car: document.getElementById('carSelect').value });
+    const li = document.createElement('li'); li.innerHTML = `<span>[ON]</span> ${name}`;
+    document.getElementById('playerList').appendChild(li);
+}
+
+function startGame(trackData) {
+    gameState = 'playing';
+    document.getElementById('lobbyUI').style.display = 'none'; document.getElementById('gameUI').style.display = 'block';
+    
+    if(window.lobbyPodium) scene.remove(window.lobbyPodium);
+    
+    buildTrackFromData(trackData);
+    localCar = new Car(document.getElementById('carSelect').value, document.getElementById('playerPlate').value, document.getElementById('nitroSelect').value, true);
+    localCar.mesh.position.set((Math.random()-0.5)*20, 1, 0); 
+}
+
+// ==========================================
+// 7. POLICE MANAGER E RADARES
+// ==========================================
+let policeCar = null; let policeActive = false; let policeTimer = 0;
 
 function checkRadarLogic(carPos, speed) {
     if (policeActive) { document.getElementById('radarAlert').style.display = 'none'; return; }
     let nearRadar = false;
     for (let rZ of radars) {
         const dist = carPos.z - rZ; 
-        if (dist > 0 && dist < 500) { 
-            nearRadar = true; document.getElementById('radarAlert').style.display = 'block';
-        }
-        if (dist < 0 && dist > -30 && speed > 150) { 
-            spawnPolice(carPos); document.getElementById('radarAlert').style.display = 'none'; break;
-        }
+        if (dist > 0 && dist < 500) { nearRadar = true; document.getElementById('radarAlert').style.display = 'block'; }
+        if (dist < 0 && dist > -30 && speed > 150) { spawnPolice(carPos); document.getElementById('radarAlert').style.display = 'none'; break; }
     }
     if (!nearRadar) document.getElementById('radarAlert').style.display = 'none';
 }
@@ -525,11 +706,10 @@ function updatePolice(dt, playerMesh) {
     if (!policeActive || !policeCar) return;
     policeTimer -= dt;
     
-    // Curva Suave e Falha
     const targetPos = playerMesh.position.clone();
     const lookAtMatrix = new THREE.Matrix4().lookAt(policeCar.position, targetPos, new THREE.Vector3(0,1,0));
     const targetQuat = new THREE.Quaternion().setFromRotationMatrix(lookAtMatrix);
-    policeCar.quaternion.slerp(targetQuat, dt * 1.5); // Demora pra virar
+    policeCar.quaternion.slerp(targetQuat, dt * 1.5); 
     
     policeCar.translateZ((localCar.speed + 15) * dt); 
 
@@ -541,7 +721,6 @@ function updatePolice(dt, playerMesh) {
             policeCar.position.x += (Math.random() - 0.5) * 15; policeCar.position.z += 20; 
         }
     }
-
     if (policeTimer <= 0 || policeCar.position.distanceTo(playerMesh.position) > 400) {
         showEventMsg("POLÍCIA DESPISTADA", 0x00ff00); despawnPolice();
     }
@@ -549,163 +728,19 @@ function updatePolice(dt, playerMesh) {
 
 function despawnPolice() {
     if (policeCar) scene.remove(policeCar);
-    policeActive = false; policeCar = null;
-    document.getElementById('policeFlash').style.display = 'none';
+    policeActive = false; policeCar = null; document.getElementById('policeFlash').style.display = 'none';
 }
 
 function showEventMsg(msg, colorHex) {
-    const el = document.getElementById('eventText'); el.innerText = msg;
-    el.style.color = '#' + colorHex.toString(16).padStart(6, '0');
+    const el = document.getElementById('eventText'); el.innerText = msg; el.style.color = '#' + colorHex.toString(16).padStart(6, '0');
     el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3000);
 }
 
 // ==========================================
-// REDE (PEERJS) E LOBBY 
+// 8. MAIN GAME LOOP
 // ==========================================
-const keys = {};
-window.addEventListener('keydown', e => { if(e.key === 'F1') { e.preventDefault(); camMode = camMode === 0 ? 1 : 0; } keys[e.key.toLowerCase()] = true; if(e.key === ' ') keys[' '] = true; });
-window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; if(e.key === ' ') keys[' '] = false; });
-window.addEventListener('mousedown', e => { if(e.button === 0) keys.m1 = true; });
-window.addEventListener('mouseup', e => { if(e.button === 0) keys.m1 = false; });
+let eventCheckTimer = 0;
 
-const touchMap = { 'btnLeft': 'a', 'btnRight': 'd', 'btnGas': 'w', 'btnBrake': 'f', 'btnNitro': ' ', 'btnDrift': 'shift', 'btnSpec': 'e', 'btnDash': 'm1' };
-for(let id in touchMap) {
-    const el = document.getElementById(id);
-    el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[touchMap[id]] = true; });
-    el.addEventListener('touchend', (e) => { e.preventDefault(); keys[touchMap[id]] = false; });
-}
-
-function initLobby() {
-    document.getElementById('btnHost').onclick = setupHost;
-    document.getElementById('btnJoin').onclick = setupClient;
-    document.getElementById('btnStart').onclick = () => { broadcastNetwork({action: 'start'}); startGame(); };
-    document.getElementById('winBadge').innerText = `VITÓRIAS: ${wins}`;
-    if (wins >= 10) document.getElementById('optStardust').style.display = 'block';
-
-    const select = document.getElementById('carSelect');
-    select.addEventListener('change', () => {
-        if(select.value === 'mustangmach1.gltf') document.getElementById('optNitroBlack').style.display = 'block';
-        else document.getElementById('optNitroBlack').style.display = 'none';
-    });
-}
-
-function setupHost() {
-    isHost = true;
-    myId = Math.floor(100000 + Math.random() * 900000).toString();
-    peer = new Peer(myId);
-    peer.on('open', id => {
-        document.getElementById('btnHost').style.display = 'none';
-        document.getElementById('btnJoin').style.display = 'none';
-        document.getElementById('joinCode').style.display = 'none';
-        document.getElementById('roomInfo').style.display = 'block';
-        document.getElementById('btnStart').style.display = 'block';
-        document.getElementById('displayCode').innerText = id;
-        addPlayerToList(id, document.getElementById('playerName').value || 'Host');
-    });
-    peer.on('connection', conn => {
-        connections[conn.peer] = conn;
-        conn.on('data', data => handleNetworkData(data, conn.peer));
-    });
-}
-
-function setupClient() {
-    const code = document.getElementById('joinCode').value;
-    if(!code) return;
-    peer = new Peer();
-    peer.on('open', id => {
-        myId = id;
-        hostConn = peer.connect(code);
-        hostConn.on('open', () => {
-            document.getElementById('btnHost').style.display = 'none';
-            document.getElementById('btnJoin').style.display = 'none';
-            document.getElementById('joinCode').style.display = 'none';
-            document.getElementById('roomInfo').style.display = 'block';
-            document.getElementById('displayCode').innerText = code + " (Aguardando Host...)";
-            hostConn.send({action: 'join', name: document.getElementById('playerName').value || 'Player', car: document.getElementById('carSelect').value, nitro: document.getElementById('nitroSelect').value });
-        });
-        hostConn.on('data', data => handleNetworkData(data, code));
-    });
-}
-
-function handleNetworkData(data, senderId) {
-    if (isHost) {
-        if (data.action === 'join') {
-            addPlayerToList(senderId, data.name);
-            broadcastNetwork({action: 'lobbySync', players: roomPlayers});
-        }
-        if (data.action === 'update' || data.action === 'vfx' || data.action === 'special') {
-            broadcastNetwork(data, senderId); // Repassa para todos
-            applyNetworkData(data, senderId); // Aplica localmente
-        }
-    } else {
-        if (data.action === 'lobbySync') {
-            document.getElementById('playerList').innerHTML = '';
-            data.players.forEach(p => addPlayerToList(p.id, p.name, true));
-        }
-        if (data.action === 'start') startGame();
-        if (data.action === 'update' || data.action === 'vfx' || data.action === 'special') applyNetworkData(data, senderId);
-    }
-}
-
-function broadcastNetwork(data, ignoreId = null) {
-    if (isHost) {
-        for(let id in connections) {
-            if(id !== ignoreId && connections[id].open) connections[id].send(data);
-        }
-    } else if (hostConn && hostConn.open) {
-        hostConn.send(data);
-    }
-}
-
-function applyNetworkData(data, senderId) {
-    if(data.action === 'update') {
-        if(!networkCars[data.id]) {
-            networkCars[data.id] = new Car(data.car, 'NET', data.nitro, false);
-        }
-        networkCars[data.id].mesh.position.set(data.x, data.y, data.z);
-        networkCars[data.id].mesh.rotation.y = data.rotY;
-        networkCars[data.id].mesh.children[0].rotation.x = data.rotX;
-    }
-    if(data.action === 'vfx') {
-        vfx.spawn(new THREE.Vector3(data.pos.x, data.pos.y, data.pos.z), data.type, data.color, new THREE.Vector3(data.vel.x, data.vel.y, data.vel.z));
-    }
-    if(data.action === 'special') {
-        if(localCar && localCar.mesh.position.distanceTo(new THREE.Vector3(data.pos.x, data.pos.y, data.pos.z)) < 150) {
-            if(data.model === 'mustang.gltf') { vfx.spawn(localCar.mesh.position, 'lightning', 0x00ffff); localCar.stunTimer = 1.0; }
-            if(data.model === 'charger.gltf') localCar.stunTimer = 1.0;
-            if(data.model === 'porsche911.gltf') { document.getElementById('smokeScreen').style.display='block'; setTimeout(()=>document.getElementById('smokeScreen').style.display='none', 1000); }
-            if(data.model === 'mustangmach1.gltf') localCar.vy = 60;
-        }
-    }
-}
-
-function addPlayerToList(id, name, isSync = false) {
-    if(!isSync) roomPlayers.push({id, name, car: document.getElementById('carSelect').value, nitro: document.getElementById('nitroSelect').value});
-    const li = document.createElement('li');
-    li.innerHTML = `<span>[ON]</span> ${name}`;
-    document.getElementById('playerList').appendChild(li);
-}
-
-function startGame() {
-    gameState = 'playing';
-    document.getElementById('lobbyUI').style.display = 'none';
-    document.getElementById('gameUI').style.display = 'block';
-    document.getElementById('btnStart').style.display = 'none';
-    buildTrack();
-    
-    localCar = new Car(
-        document.getElementById('carSelect').value, 
-        document.getElementById('playerPlate').value, 
-        document.getElementById('nitroSelect').value, 
-        true
-    );
-    localCar.mesh.position.set(0, 1, 0);
-}
-
-// ==========================================
-// GAME LOOP (Câmera colada + Rede)
-// ==========================================
-let lastTime = performance.now();
 function gameLoop() {
     requestAnimationFrame(gameLoop);
     const now = performance.now();
@@ -714,47 +749,54 @@ function gameLoop() {
 
     if (gameState === 'lobby') {
         vfx.update(dt, null, 0);
+        if(window.lobbyPodium) window.lobbyPodium.rotation.y += 0.8 * dt; 
         camera.position.set(0, 4, 0); camera.lookAt(12, 3, -18); 
     } 
     else if (gameState === 'playing' && localCar) {
         
-        if (Math.abs(localCar.mesh.position.x) > 30) {
-            const glow = (Math.abs(localCar.mesh.position.x) - 30) / 8; 
-            wallL.material.opacity = glow; wallR.material.opacity = glow;
-        } else { wallL.material.opacity = 0; wallR.material.opacity = 0; }
-
-        if (Math.random() < 0.0003 && blackoutTimer <= 0 && !isRaining) {
-            blackoutTimer = 15; isBlackout = true; document.getElementById('blackoutAlert').style.display = 'block';
+        if (isHost) {
+            eventCheckTimer -= dt;
+            if (eventCheckTimer <= 0) {
+                eventCheckTimer = 5.0; 
+                if (Math.random() < 0.05 && !isRaining && !isBlackout) {
+                    const eType = Math.random() > 0.5 ? 'rain' : 'blackout';
+                    triggerEventSync(eType); broadcastNetwork({action: 'triggerEvent', event: eType});
+                }
+            }
         }
+
         if (blackoutTimer > 0) {
             blackoutTimer -= dt;
             scene.fog.density = THREE.MathUtils.lerp(scene.fog.density, 0.05, dt * 2);
-            ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.05, dt * 2);
-            dirLight.intensity = THREE.MathUtils.lerp(dirLight.intensity, 0.0, dt * 2);
+            ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.05, dt * 2); dirLight.intensity = THREE.MathUtils.lerp(dirLight.intensity, 0.0, dt * 2);
             if (blackoutTimer <= 0) { isBlackout = false; document.getElementById('blackoutAlert').style.display = 'none'; }
         } else {
             scene.fog.density = THREE.MathUtils.lerp(scene.fog.density, 0.003, dt * 2);
-            ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.9, dt * 2);
-            dirLight.intensity = THREE.MathUtils.lerp(dirLight.intensity, 1.8, dt * 2);
+            ambientLight.intensity = THREE.MathUtils.lerp(ambientLight.intensity, 0.9, dt * 2); dirLight.intensity = THREE.MathUtils.lerp(dirLight.intensity, 1.8, dt * 2);
         }
 
-        if (Math.random() < 0.0005 && rainTimer <= 0 && !isBlackout) {
-            rainTimer = 15; isRaining = true; vfx.createRain(); showEventMsg("CHUVA! PISTA ESCORREGADIA!", 0x0055ff);
-        }
         if (rainTimer > 0) {
             rainTimer -= dt;
             if (rainTimer <= 0) { isRaining = false; showEventMsg("O TEMPO ABRIU", 0xffffff); }
         }
 
-        localCar.updateLocal(dt, keys);
+        const carData = CAR_DATA[localCar.modelName];
+        localCar.updateLocal(dt, keys, carData, document.getElementById('playerPlate').value);
         
-        // Sincroniza Posição
         broadcastNetwork({ 
             action: 'update', id: myId, 
             x: localCar.mesh.position.x, y: localCar.mesh.position.y, z: localCar.mesh.position.z, 
             rotY: localCar.mesh.rotation.y, rotX: localCar.mesh.children[0].rotation.x,
             car: localCar.modelName, nitro: localCar.nitroColor 
         });
+
+        for(let id in networkCars) {
+            let oCar = networkCars[id];
+            if(oCar.mesh.position.distanceTo(localCar.mesh.position) < 4) {
+                localCar.speed *= 0.8; screenShake = 4;
+                localCar.mesh.position.x += (localCar.mesh.position.x > oCar.mesh.position.x ? 2 : -2); 
+            }
+        }
 
         vfx.update(dt, localCar.mesh.position, localCar.speed); 
         checkRadarLogic(localCar.mesh.position, localCar.speed);
@@ -768,18 +810,14 @@ function gameLoop() {
             if (Math.abs(cx - item.x) < (item.width/2 + 2) && Math.abs(cz - item.z) < (item.depth/2 + 2)) {
                 if (item.type === 'ramp' && localCar.vy === 0) { 
                     localCar.vy = 45; localCar.pitch = -0.3; localCar.speed += 30; 
-                } else if (item.type === 'slow') {
-                    localCar.speed *= 0.96; 
-                } else if (item.type === 'boost') {
-                    localCar.boostTimer = 3.0; localCar.speed += 50; 
-                } else if (item.type === 'health') {
+                } else if (item.type === 'slow') { localCar.speed *= 0.96; 
+                } else if (item.type === 'boost') { localCar.boostTimer = 3.0; localCar.speed += 50; 
+                } else if (item.type === 'health') { 
                     localCar.health = Math.min(100, localCar.health + 50); scene.remove(item.mesh); trackItems.splice(i, 1);
+                    broadcastNetwork({action: 'consumeItem', itemId: item.id});
                 } else if (item.type === 'damage') {
-                    if (localCar.dashTimer > 0) { 
-                        scene.remove(item.mesh); trackItems.splice(i, 1); screenShake = 6;
-                    } else {
-                        localCar.takeDamage(item.damage); localCar.speed *= 0.3; scene.remove(item.mesh); trackItems.splice(i, 1);
-                    }
+                    if (localCar.dashTimer > 0) { scene.remove(item.mesh); trackItems.splice(i, 1); screenShake = 6; broadcastNetwork({action: 'consumeItem', itemId: item.id}); } 
+                    else { localCar.takeDamage(item.damage); localCar.speed *= 0.3; scene.remove(item.mesh); trackItems.splice(i, 1); broadcastNetwork({action: 'consumeItem', itemId: item.id}); }
                 }
             }
         }
@@ -790,36 +828,29 @@ function gameLoop() {
             setTimeout(() => window.location.reload(), 4000);
         }
 
-        // CÂMERA COLADA (F1)
-        let idealCamPos = new THREE.Vector3();
-        let lookAtPos = new THREE.Vector3();
-
+        let idealCamPos = new THREE.Vector3(); let lookAtPos = new THREE.Vector3();
         if (camMode === 1) { 
-            idealCamPos = localCar.mesh.position.clone().add(new THREE.Vector3(0, 1.0, -0.5).applyMatrix4(new THREE.Matrix4().extractRotation(localCar.mesh.matrix)));
+            idealCamPos = localCar.mesh.position.clone().add(new THREE.Vector3(0, 1.0, 0.5).applyMatrix4(new THREE.Matrix4().extractRotation(localCar.mesh.matrix)));
             lookAtPos = localCar.mesh.position.clone().add(new THREE.Vector3(0, 1.0, -20).applyMatrix4(new THREE.Matrix4().extractRotation(localCar.mesh.matrix)));
             camera.position.copy(idealCamPos); 
         } else { 
-            // CÂMERA NO PORTA MALAS
-            let camOffset = new THREE.Vector3(0, 1.0, 1.8); 
-            if (localCar.isDrifting) camOffset = new THREE.Vector3(keys.a ? -2.0 : 2.0, 1.0, 1.6); 
-            if (localCar.emoteActive) camOffset = new THREE.Vector3(0, 4, 8); 
+            let camOffset = new THREE.Vector3(0, 1.5, 3.5); 
+            if (localCar.isDrifting) camOffset = new THREE.Vector3(keys.a ? -2.0 : 2.0, 1.5, 3.0); 
+            if (localCar.emoteActive) camOffset = new THREE.Vector3(0, 6, 12); 
             
             idealCamPos = localCar.mesh.position.clone().add(camOffset.applyMatrix4(new THREE.Matrix4().extractRotation(localCar.mesh.matrix)));
             lookAtPos = localCar.mesh.position.clone().add(new THREE.Vector3(0, 0.6, 0));
-            camera.position.lerp(idealCamPos, dt * 20); // Lerp muito rápido pra acompanhar
+            camera.position.lerp(idealCamPos, dt * 15); 
         }
         
         if (screenShake > 0) {
-            camera.position.x += (Math.random()-0.5) * screenShake;
-            camera.position.y += (Math.random()-0.5) * screenShake;
-            screenShake *= 0.9; 
-            if (screenShake < 0.1) screenShake = 0;
+            camera.position.x += (Math.random()-0.5) * screenShake; camera.position.y += (Math.random()-0.5) * screenShake;
+            screenShake *= 0.9; if (screenShake < 0.1) screenShake = 0;
         }
 
         const targetFov = camMode === 1 ? 90 + (localCar.speed / 6) : 75 + (localCar.speed / 5); 
         camera.fov += (Math.min(120, targetFov) - camera.fov) * (dt * 5);
-        camera.updateProjectionMatrix();
-        camera.lookAt(lookAtPos);
+        camera.updateProjectionMatrix(); camera.lookAt(lookAtPos);
 
         document.getElementById('speedVal').innerText = Math.floor(Math.abs(localCar.speed));
         document.getElementById('healthBar').style.width = localCar.health + '%';
